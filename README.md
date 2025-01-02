@@ -2,7 +2,7 @@
 
 ### 0. 大作业说明
 
-本大作业论文翻译自论文[BEVFormer: Learning Bird’s-Eye-View Representation from Multi-Camera Images via Spatiotemporal Transformers](https://arxiv.org/pdf/2203.17270v2.pdf)，会议时间：ECCV 2022，代码链接为：https://github.com/Gudutan-ge/bevformer_hm，测试代码位于`tools/test.py`。
+本大作业论文翻译自论文[BEVFormer: Learning Bird’s-Eye-View Representation from Multi-Camera Images via Spatiotemporal Transformers](https://arxiv.org/pdf/2203.17270v2.pdf)，会议时间：ECCV 2022，测试代码位于`tools/test.py`。
 
 ### 1. 环境配置
 
