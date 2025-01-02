@@ -126,9 +126,9 @@ class TemporalSelfAttention(BaseModule):
         self._is_init = True
 
     def forward(self,
-                query,
-                key=None,
-                value=None,
+                query, # bev_query
+                key=None, # prev_bev
+                value=None, # prev_bev
                 identity=None,
                 query_pos=None,
                 key_padding_mask=None,
@@ -174,10 +174,10 @@ class TemporalSelfAttention(BaseModule):
              Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
 
-        if value is None:
+        if value is None: # prev_bev没有，第一帧
             assert self.batch_first
             bs, len_bev, c = query.shape
-            value = torch.stack([query, query], 1).reshape(bs*2, len_bev, c)
+            value = torch.stack([query, query], 1).reshape(bs*2, len_bev, c) # 第一帧的 value 是 bev_query 堆叠
 
             # value = torch.cat([query, query], 0)
 
@@ -187,13 +187,13 @@ class TemporalSelfAttention(BaseModule):
             query = query + query_pos
         if not self.batch_first:
             # change to (bs, num_query ,embed_dims)
-            query = query.permute(1, 0, 2)
-            value = value.permute(1, 0, 2)
+            query = query.permute(1, 0, 2) # query 加了 pos_encoding
+            value = value.permute(1, 0, 2) # value 由 query 堆叠，没有pos_encoding
         bs,  num_query, embed_dims = query.shape
         _, num_value, _ = value.shape
         assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
         assert self.num_bev_queue == 2
-
+        # value[:bs] = query - query_pos
         query = torch.cat([value[:bs], query], -1)
         value = self.value_proj(value)
 

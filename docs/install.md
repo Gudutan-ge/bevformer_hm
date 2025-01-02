@@ -25,6 +25,7 @@ conda install -c omgarcia gcc-6 # gcc-6.2
 **c. Install mmcv-full.**
 ```shell
 pip install mmcv-full==1.4.0
+mim install mmcv==2.0.0 -f https://download.openmmlab.com/mmcv/dist/cu118/torch2.0 index.html
 #  pip install mmcv-full==1.4.0 -f https://download.openmmlab.com/mmcv/dist/cu111/torch1.9.0/index.html
 ```
 
@@ -63,3 +64,4 @@ cd ckpts & wget https://github.com/zhiqi-li/storage/releases/download/v1.0/r101_
 ```
 
 note: this pretrained model is the same model used in [detr3d](https://github.com/WangYueFt/detr3d)
+./work_dirs/bevformer_tiny/latest.pth

@@ -69,15 +69,16 @@ class PerceptionTransformer(BaseModule):
 
     def init_layers(self):
         """Initialize layers of the Detr3DTransformer."""
-        self.level_embeds = nn.Parameter(torch.Tensor(
+        # nn.Parameter 将一个普通的张量转换为模型的参数
+        self.level_embeds = nn.Parameter(torch.Tensor( #尺度嵌入：可学习的embedding参数，num_feature_levels：特征尺度数量，embed_dims：嵌入向量的维度
             self.num_feature_levels, self.embed_dims))
-        self.cams_embeds = nn.Parameter(
-            torch.Tensor(self.num_cams, self.embed_dims))
+        self.cams_embeds = nn.Parameter(torch.Tensor(  #摄像头嵌入：可学习的embedding参数，num_cams：摄像头数量，embed_dims：嵌入向量的维度
+            self.num_cams, self.embed_dims))
         self.reference_points = nn.Linear(self.embed_dims, 3)
-        self.can_bus_mlp = nn.Sequential(
-            nn.Linear(18, self.embed_dims // 2),
+        self.can_bus_mlp = nn.Sequential( # 多层感知机。处理can bus信息，can_bus 输入包含 18 个特征
+            nn.Linear(18, self.embed_dims // 2), #18个输入维度
             nn.ReLU(inplace=True),
-            nn.Linear(self.embed_dims // 2, self.embed_dims),
+            nn.Linear(self.embed_dims // 2, self.embed_dims), # 最后映射到embed_dims维度，便于与其他bev特征进行融合
             nn.ReLU(inplace=True),
         )
         if self.can_bus_norm:
@@ -103,44 +104,48 @@ class PerceptionTransformer(BaseModule):
     @auto_fp16(apply_to=('mlvl_feats', 'bev_queries', 'prev_bev', 'bev_pos'))
     def get_bev_features(
             self,
-            mlvl_feats,
-            bev_queries,
+            mlvl_feats, #多尺度信息 list(1, 6, 256, 15, 25)
+            bev_queries,#([50*50, 256])
             bev_h,
             bev_w,
-            grid_length=[0.512, 0.512],
+            grid_length=[0.512, 0.512], #每个 BEV 网格的大小，默认为 `[0.512, 0.512]`。
             bev_pos=None,
             prev_bev=None,
-            **kwargs):
+            **kwargs): # kwargs用于接收 任意数量的关键字参数，这里包含 img_meta——图片信息
         """
         obtain bev features.
         """
 
-        bs = mlvl_feats[0].size(0)
-        bev_queries = bev_queries.unsqueeze(1).repeat(1, bs, 1)
-        bev_pos = bev_pos.flatten(2).permute(2, 0, 1)
+        bs = mlvl_feats[0].size(0) # bs = 1
+        bev_queries = bev_queries.unsqueeze(1).repeat(1, bs, 1) #在第 1 维扩展查询张量变为 (num_queries, 1, embed_dim)，并将其在第 1 维上重复bs (num_queries, bs, embed_dim)
+        bev_pos = bev_pos.flatten(2).permute(2, 0, 1) #bev_pos从 [1, 256, 50, 50] 先变成 [1, 256, 50 * 50] 再变成 [50 * 50, 1, 256]， bevquery维度一致
 
         # obtain rotation angle and shift with ego motion
+        # 为了得到shift
         delta_x = np.array([each['can_bus'][0]
-                           for each in kwargs['img_metas']])
+                           for each in kwargs['img_metas']]) # kwargs['img_metas']包含每一帧的图像信息，图像信息通过字典存储，而其中的can_bus为车辆运动信息，第0个是车辆在x方向上的平移量
         delta_y = np.array([each['can_bus'][1]
-                           for each in kwargs['img_metas']])
+                           for each in kwargs['img_metas']]) # 第1个是车辆在y方向上的平移量
         ego_angle = np.array(
-            [each['can_bus'][-2] / np.pi * 180 for each in kwargs['img_metas']])
-        grid_length_y = grid_length[0]
+            [each['can_bus'][-2] / np.pi * 180 for each in kwargs['img_metas']]) # 倒数第2个是车辆的现在的朝向角度（以弧度为单位），转化为°
+        
+        grid_length_y = grid_length[0] # grid_length_y 和 grid_length_x 分别是 BEV 一个网格在 y 和 x 方向上的大小（单位：米）。
         grid_length_x = grid_length[1]
-        translation_length = np.sqrt(delta_x ** 2 + delta_y ** 2)
-        translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180
-        bev_angle = ego_angle - translation_angle
+        
+        translation_length = np.sqrt(delta_x ** 2 + delta_y ** 2) #平移距离的欧氏距离。
+        translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180 #平移方向的角度
+        bev_angle = ego_angle - translation_angle # 车辆的运动方向与当前朝向之间的相对旋转 = 当前朝向 - 运动方向
         shift_y = translation_length * \
             np.cos(bev_angle / 180 * np.pi) / grid_length_y / bev_h
         shift_x = translation_length * \
             np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
-        shift_y = shift_y * self.use_shift
-        shift_x = shift_x * self.use_shift
-        shift = bev_queries.new_tensor(
-            [shift_x, shift_y]).permute(1, 0)  # xy, bs -> bs, xy
+        shift_y = shift_y * self.use_shift # use_shift为 bool 值
+        shift_x = shift_x * self.use_shift #计算 BEV 特征图在 x 和 y 方向上的偏移。
+        # shift_x,shift_y是数组，包含多张图像的偏移
+        shift = bev_queries.new_tensor( #确保新张量的类型（如浮点数类型）和设备（如 CPU 或 GPU）与 bev_queries 一致
+            [shift_x, shift_y]).permute(1, 0)  # xy, bs -> bs, xy  生成一个形状为 (bs, 2) 的张量
 
-        if prev_bev is not None:
+        if prev_bev is not None: # 有 prev_bev
             if prev_bev.shape[1] == bev_h * bev_w:
                 prev_bev = prev_bev.permute(1, 0, 2)
             if self.rotate_prev_bev:
@@ -157,33 +162,40 @@ class PerceptionTransformer(BaseModule):
 
         # add can bus signals
         can_bus = bev_queries.new_tensor(
-            [each['can_bus'] for each in kwargs['img_metas']])  # [:, :]
-        can_bus = self.can_bus_mlp(can_bus)[None, :, :]
-        bev_queries = bev_queries + can_bus * self.use_can_bus
+            [each['can_bus'] for each in kwargs['img_metas']])  # [:, :] (1,18) can_bus内容见 docs/img_metasss.txt
+        can_bus = self.can_bus_mlp(can_bus)[None, :, :] # 多层感知机处理canbus信息，None 是在 can_bus 的第一维上插入一个新的维度，相当于 unsqueeze(0)
+        bev_queries = bev_queries + can_bus * self.use_can_bus # 将 can_bus 与 bev_queries 结合
 
+
+        # SCA 才会用到多尺度图像信息
         feat_flatten = []
         spatial_shapes = []
-        for lvl, feat in enumerate(mlvl_feats):
+        for lvl, feat in enumerate(mlvl_feats): # lvl是索引，feat是内容(1, 6, 256, h, w)，遍历不同尺度信息
             bs, num_cam, c, h, w = feat.shape
-            spatial_shape = (h, w)
-            feat = feat.flatten(3).permute(1, 0, 3, 2)
+            spatial_shape = (h, w) # 空间大小
+            feat = feat.flatten(3).permute(1, 0, 3, 2) # (6, 1, h * w, 256)
             if self.use_cams_embeds:
-                feat = feat + self.cams_embeds[:, None, None, :].to(feat.dtype)
+                feat = feat + self.cams_embeds[:, None, None, :].to(feat.dtype) # 将 self.cams_embeds 的形状从 (num_cam, embed_dim) 扩展到 (num_cam, 1, 1, embed_dim) = (6, 1, 1, 256)
+                # 广播机制 将(6, 1, 1, 256)广播到(6, 1, h * w, 256)再逐元素相加。每个空间位置的每个摄像头都加入了对应的摄像头嵌入向量。
             feat = feat + self.level_embeds[None,
-                                            None, lvl:lvl + 1, :].to(feat.dtype)
-            spatial_shapes.append(spatial_shape)
-            feat_flatten.append(feat)
+                                            None, lvl:lvl + 1, :].to(feat.dtype) 
+            # lvl:lvl + 1 实际上选取的是 self.level_embeds[lvl] 对应的行（即第 lvl 个尺度的嵌入向量）表示当前尺度的嵌入向量。 (1, embed_dims)
+            # None, None 将 self.level_embeds 的形状从 (1, embed_dims) 扩展到 (1, 1, 1, embed_dims)
+            # 广播机制 将(1, 1, 1, 256)广播到(6, 1, h * w, 256)再逐元素相加。每个空间位置的每个摄像头都会加入对应的尺度嵌入信息。
+            spatial_shapes.append(spatial_shape) # 存储不同尺度下空间形状
+            feat_flatten.append(feat) # 存储不同尺度特征 list[(6, 1, h * w, 256)]
 
-        feat_flatten = torch.cat(feat_flatten, 2)
-        spatial_shapes = torch.as_tensor(
+        feat_flatten = torch.cat(feat_flatten, 2) # 将列表中所有张量按第二维拼接(6, 1, h1 * w1 + h2 * w2 + ... + hn * wn, 256)，拼接不同尺度下空间位置
+        spatial_shapes = torch.as_tensor( # 将不同尺度空间大小变为张量 (num_levels, 2)
             spatial_shapes, dtype=torch.long, device=bev_pos.device)
         level_start_index = torch.cat((spatial_shapes.new_zeros(
             (1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
-
+            # prod(1)根据第1维度将元素相乘 tensor([h1 * w1, h2 * w2, ..., hn * wn])，cumsum(0)沿着第0维度求累计和tensor([h1 * w1, h2 * w2 + h1 * w1, ..., hn * wn + ... + h2 * w2 + h1 * w1]) [:-1]取出除最后一个以外的所有值
+            # new_zeros((1,))创建形状为(1,)的值为0的张量，设备与 spatial_shapes 相同。 cat将两个张量拼接tensor([0, h1 * w1, h2 * w2 + h1 * w1, ..., hn-1 * wn-1 + ... + h2 * w2 + h1 * w1])——找到在展平的空间中每个尺度的起始位置
         feat_flatten = feat_flatten.permute(
-            0, 2, 1, 3)  # (num_cam, H*W, bs, embed_dims)
+            0, 2, 1, 3)  # (num_cam, H*W, bs, embed_dims)  (6, h1 * w1 + h2 * w2 + ... + hn * wn, 1, 256)
 
-        bev_embed = self.encoder(
+        bev_embed = self.encoder( # 进入encoder
             bev_queries,
             feat_flatten,
             feat_flatten,

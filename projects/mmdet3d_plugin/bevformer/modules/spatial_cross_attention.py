@@ -74,10 +74,10 @@ class SpatialCrossAttention(BaseModule):
     
     @force_fp32(apply_to=('query', 'key', 'value', 'query_pos', 'reference_points_cam'))
     def forward(self,
-                query,
-                key,
-                value,
-                residual=None,
+                query, # TSA的输出 (bs, num_query, embed_dims)
+                key, # feat_flatten
+                value, # feat_flatten
+                residual=None, # 
                 query_pos=None,
                 key_padding_mask=None,
                 reference_points=None,
@@ -135,21 +135,21 @@ class SpatialCrossAttention(BaseModule):
 
         D = reference_points_cam.size(3)
         indexes = []
-        for i, mask_per_img in enumerate(bev_mask):
+        for i, mask_per_img in enumerate(bev_mask): # 遍历每个相机的数据
             index_query_per_img = mask_per_img[0].sum(-1).nonzero().squeeze(-1)
-            indexes.append(index_query_per_img)
-        max_len = max([len(each) for each in indexes])
+            indexes.append(index_query_per_img) # 得到每个相机中有效位置的索引
+        max_len = max([len(each) for each in indexes]) # 所有相机中最大有效数
 
         # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
-        queries_rebatch = query.new_zeros(
+        queries_rebatch = query.new_zeros( # query(bs, num_query, embed_dims)
             [bs, self.num_cams, max_len, self.embed_dims])
-        reference_points_rebatch = reference_points_cam.new_zeros(
+        reference_points_rebatch = reference_points_cam.new_zeros( # reference_points_cam(num_cam, B, num_query, D, 2)
             [bs, self.num_cams, max_len, D, 2])
         
         for j in range(bs):
-            for i, reference_points_per_img in enumerate(reference_points_cam):   
-                index_query_per_img = indexes[i]
-                queries_rebatch[j, i, :len(index_query_per_img)] = query[j, index_query_per_img]
+            for i, reference_points_per_img in enumerate(reference_points_cam):# 遍历每个相机
+                index_query_per_img = indexes[i] # 每个相机中有效位置的索引
+                queries_rebatch[j, i, :len(index_query_per_img)] = query[j, index_query_per_img] # 通过索引找出query对应
                 reference_points_rebatch[j, i, :len(index_query_per_img)] = reference_points_per_img[j, index_query_per_img]
 
         num_cams, l, bs, embed_dims = key.shape

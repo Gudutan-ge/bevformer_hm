@@ -1,5 +1,5 @@
 # BEvFormer-small consumes at lease 10500M GPU memory
-# compared to bevformer_base, bevformer_small has
+# compared to bevformer_base, bevformer_small has #相较于base的区别
 # smaller BEV: 200*200 -> 150*150
 # less encoder layers: 6 -> 3
 # smaller input size: 1600*900 -> (1600*900)*0.8

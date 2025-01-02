@@ -39,16 +39,16 @@ class BEVFormerEncoder(TransformerLayerSequence):
         super(BEVFormerEncoder, self).__init__(*args, **kwargs)
         self.return_intermediate = return_intermediate
 
-        self.num_points_in_pillar = num_points_in_pillar
-        self.pc_range = pc_range
+        self.num_points_in_pillar = num_points_in_pillar # 4
+        self.pc_range = pc_range # [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
         self.fp16_enabled = False
 
     @staticmethod
     def get_reference_points(H, W, Z=8, num_points_in_pillar=4, dim='3d', bs=1, device='cuda', dtype=torch.float):
         """Get the reference points used in SCA and TSA.
         Args:
-            H, W: spatial shape of bev.
-            Z: hight of pillar.
+            H, W: spatial shape of bev. H,W = bev_h, bev_w
+            Z: hight of pillar.  Z = 点云Z轴范围
             D: sample D points uniformly from each pillar.
             device (obj:`device`): The device where
                 reference_points should be.
@@ -59,29 +59,29 @@ class BEVFormerEncoder(TransformerLayerSequence):
 
         # reference points in 3D space, used in spatial cross-attention (SCA)
         if dim == '3d':
-            zs = torch.linspace(0.5, Z - 0.5, num_points_in_pillar, dtype=dtype,
-                                device=device).view(-1, 1, 1).expand(num_points_in_pillar, H, W) / Z
-            xs = torch.linspace(0.5, W - 0.5, W, dtype=dtype,
+            zs = torch.linspace(0.5, Z - 0.5, num_points_in_pillar, dtype=dtype, # z轴从0.5到7.5，等间隔取num_points_in_pillar个点 (num_points_in_pillar, )
+                                device=device).view(-1, 1, 1).expand(num_points_in_pillar, H, W) / Z # view将(num_points_in_pillar, )变为(num_points_in_pillar, 1, 1) expand变为(num_points_in_pillar, H, W) 再对每个元素/Z
+            xs = torch.linspace(0.5, W - 0.5, W, dtype=dtype, # 在x轴上均匀取W个点(W, )，view变为(1, 1, W)，expand变为(num_points_in_pillar, H, W)
                                 device=device).view(1, 1, W).expand(num_points_in_pillar, H, W) / W
-            ys = torch.linspace(0.5, H - 0.5, H, dtype=dtype,
+            ys = torch.linspace(0.5, H - 0.5, H, dtype=dtype, # 在y轴上均匀取W个点(H, ) 变为(num_points_in_pillar, H, W)
                                 device=device).view(1, H, 1).expand(num_points_in_pillar, H, W) / H
-            ref_3d = torch.stack((xs, ys, zs), -1)
-            ref_3d = ref_3d.permute(0, 3, 1, 2).flatten(2).permute(0, 2, 1)
-            ref_3d = ref_3d[None].repeat(bs, 1, 1, 1)
+            ref_3d = torch.stack((xs, ys, zs), -1) # 三个张量沿着最后一维(-1)堆叠 (num_points_in_pillar, H, W, 3)
+            ref_3d = ref_3d.permute(0, 3, 1, 2).flatten(2).permute(0, 2, 1) #(num_points_in_pillar, H, W, 3) -> (num_points_in_pillar, H * W, 3)
+            ref_3d = ref_3d[None].repeat(bs, 1, 1, 1) # None会在最前面插入一个维度  (bs, num_points_in_pillar, H * W, 3)
             return ref_3d
 
         # reference points on 2D bev plane, used in temporal self-attention (TSA).
         elif dim == '2d':
-            ref_y, ref_x = torch.meshgrid(
-                torch.linspace(
+            ref_y, ref_x = torch.meshgrid( # meshgrid用来生成网格坐标，生成两个二维矩阵，每个矩阵中的每个元素都对应于 x 和 y 中某个值的组合
+                torch.linspace( # 均匀取H个纵坐标
                     0.5, H - 0.5, H, dtype=dtype, device=device),
-                torch.linspace(
+                torch.linspace( # 均匀取W个横坐标
                     0.5, W - 0.5, W, dtype=dtype, device=device)
-            )
-            ref_y = ref_y.reshape(-1)[None] / H
+            ) # 生成两个(H, W)的张量，ref_y是纵方向坐标，H行，每行坐标相同，有W列；ref_x是横方向坐标，H行，有W列，每列坐标相同。ref_x， ref_y对应工H * W个坐标
+            ref_y = ref_y.reshape(-1)[None] / H # reshape将(H, W)变为(H * W, )，None添加一个新维度(1, H * W)，/H将坐标归一化在[0, 1]
             ref_x = ref_x.reshape(-1)[None] / W
-            ref_2d = torch.stack((ref_x, ref_y), -1)
-            ref_2d = ref_2d.repeat(bs, 1, 1).unsqueeze(2)
+            ref_2d = torch.stack((ref_x, ref_y), -1) # ref_x 和 ref_y 沿着最后一维拼接，(1, H * W, 2)，表示成H * W个坐标(x, y)的形式
+            ref_2d = ref_2d.repeat(bs, 1, 1).unsqueeze(2) # (bs, H * W, 2)，unsqueeze后(bs, H * W, 1, 2)
             return ref_2d
 
     # This function must use fp32!!!
@@ -92,45 +92,51 @@ class BEVFormerEncoder(TransformerLayerSequence):
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
 
+        '''
+        转换：将激光雷达点云数据转换到相机坐标系。
+        归一化：对坐标进行深度归一化，确保 x 和 y 坐标在图像的有效区域内。
+        掩码：根据有效区域和深度信息，生成一个掩码，过滤掉无效的点云数据。
+        '''
         lidar2img = []
         for img_meta in img_metas:
             lidar2img.append(img_meta['lidar2img'])
-        lidar2img = np.asarray(lidar2img)
-        lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4)
-        reference_points = reference_points.clone()
+        lidar2img = np.asarray(lidar2img) # (6, 4, 4)
+        lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4) B = BatchSize = 1, N = 6
+        reference_points = reference_points.clone() # (bs, num_points_in_pillar, H * W, 3)
 
         reference_points[..., 0:1] = reference_points[..., 0:1] * \
-            (pc_range[3] - pc_range[0]) + pc_range[0]
+            (pc_range[3] - pc_range[0]) + pc_range[0] # 缩放为实际物理的x坐标
         reference_points[..., 1:2] = reference_points[..., 1:2] * \
-            (pc_range[4] - pc_range[1]) + pc_range[1]
+            (pc_range[4] - pc_range[1]) + pc_range[1] # y
         reference_points[..., 2:3] = reference_points[..., 2:3] * \
-            (pc_range[5] - pc_range[2]) + pc_range[2]
+            (pc_range[5] - pc_range[2]) + pc_range[2] # z
 
-        reference_points = torch.cat(
-            (reference_points, torch.ones_like(reference_points[..., :1])), -1)
+        reference_points = torch.cat(# ones_like创建形状和设备与reference_points[..., :1]一致的全为1的张量(bs, num_points_in_pillar, H * W, 1)
+            (reference_points, torch.ones_like(reference_points[..., :1])), -1) #与reference_points最后一维拼接，得到(bs, num_points_in_pillar, H * W, 4) 变成4维可以进行坐标转化
 
-        reference_points = reference_points.permute(1, 0, 2, 3)
-        D, B, num_query = reference_points.size()[:3]
-        num_cam = lidar2img.size(1)
+        reference_points = reference_points.permute(1, 0, 2, 3) # (num_points_in_pillar, bs, H * W, 4)
+        D, B, num_query = reference_points.size()[:3] # D = num_points_in_pillar, B = bs, num_query = H * W
+        num_cam = lidar2img.size(1) # num_cam = N
 
-        reference_points = reference_points.view(
+        reference_points = reference_points.view( # (D = num_points_in_pillar, B = bs, num_cam, num_query = H * W, 4, 1)
             D, B, 1, num_query, 4).repeat(1, 1, num_cam, 1, 1).unsqueeze(-1)
 
-        lidar2img = lidar2img.view(
+        lidar2img = lidar2img.view( # (D, B, N, num_query, 4, 4)
             1, B, num_cam, 1, 4, 4).repeat(D, 1, 1, num_query, 1, 1)
 
         reference_points_cam = torch.matmul(lidar2img.to(torch.float32),
-                                            reference_points.to(torch.float32)).squeeze(-1)
-        eps = 1e-5
+                                            reference_points.to(torch.float32)).squeeze(-1) # 得到(D, B, num_cam, num_query, 4)
+        eps = 1e-5 # 极小值
 
-        bev_mask = (reference_points_cam[..., 2:3] > eps)
-        reference_points_cam = reference_points_cam[..., 0:2] / torch.maximum(
-            reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps)
-
-        reference_points_cam[..., 0] /= img_metas[0]['img_shape'][0][1]
+        bev_mask = (reference_points_cam[..., 2:3] > eps) # 布尔掩码(D, B, num_cam, num_query, 1)，值为 true/false，表示 z 轴是否大于 eps
+        reference_points_cam = reference_points_cam[..., 0:2] / torch.maximum( # x 和 y 坐标将被除以 z 坐标，完成了深度归一化操作，归一化后的 x 和 y 坐标将表示相对深度的比例 (D, B, num_cam, num_query, 2)
+            reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps)# 生成(D, B, num_cam, num_query, 1)，其中 z 的值若过小用 eps 代替
+        
+        # 'img_shape'形状: [(480, 800, 3), (480, 800, 3), (480, 800, 3), (480, 800, 3), (480, 800, 3), (480, 800, 3)], 
+        reference_points_cam[..., 0] /= img_metas[0]['img_shape'][0][1] # 将x坐标归一化到[0, 1]
         reference_points_cam[..., 1] /= img_metas[0]['img_shape'][0][0]
 
-        bev_mask = (bev_mask & (reference_points_cam[..., 1:2] > 0.0)
+        bev_mask = (bev_mask & (reference_points_cam[..., 1:2] > 0.0) # 与操作 将这些条件与bev_mask结合，更新bev_mask
                     & (reference_points_cam[..., 1:2] < 1.0)
                     & (reference_points_cam[..., 0:1] < 1.0)
                     & (reference_points_cam[..., 0:1] > 0.0))
@@ -140,8 +146,8 @@ class BEVFormerEncoder(TransformerLayerSequence):
             bev_mask = bev_mask.new_tensor(
                 np.nan_to_num(bev_mask.cpu().numpy()))
 
-        reference_points_cam = reference_points_cam.permute(2, 1, 3, 0, 4)
-        bev_mask = bev_mask.permute(2, 1, 3, 0, 4).squeeze(-1)
+        reference_points_cam = reference_points_cam.permute(2, 1, 3, 0, 4) # (num_cam, B, num_query, D, 2)
+        bev_mask = bev_mask.permute(2, 1, 3, 0, 4).squeeze(-1) # (num_cam, B, num_query, D)
 
         torch.backends.cuda.matmul.allow_tf32 = allow_tf32
         torch.backends.cudnn.allow_tf32 = allow_tf32
@@ -150,9 +156,9 @@ class BEVFormerEncoder(TransformerLayerSequence):
 
     @auto_fp16()
     def forward(self,
-                bev_query,
-                key,
-                value,
+                bev_query, # bev_queries (num_queries, bs, embed_dim)
+                key, # feat_flatten 所有尺度特征展平(6, h1 * w1 + h2 * w2 + ... + hn * wn, 1, 256)
+                value, # feat_flatten (6, h1 * w1 + h2 * w2 + ... + hn * wn, 1, 256)
                 *args,
                 bev_h=None,
                 bev_w=None,
@@ -161,7 +167,7 @@ class BEVFormerEncoder(TransformerLayerSequence):
                 level_start_index=None,
                 valid_ratios=None,
                 prev_bev=None,
-                shift=0.,
+                shift=0., # (bs, 2)
                 **kwargs):
         """Forward function for `TransformerDecoder`.
         Args:
@@ -185,33 +191,33 @@ class BEVFormerEncoder(TransformerLayerSequence):
         output = bev_query
         intermediate = []
 
-        ref_3d = self.get_reference_points(
-            bev_h, bev_w, self.pc_range[5]-self.pc_range[2], self.num_points_in_pillar, dim='3d', bs=bev_query.size(1),  device=bev_query.device, dtype=bev_query.dtype)
+        ref_3d = self.get_reference_points( # pc_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0] 点云范围X[-51.2, -51.2] Y[-51.2, -51.2] Z[-5.0, 3.0]
+            bev_h, bev_w, self.pc_range[5]-self.pc_range[2], self.num_points_in_pillar, dim='3d', bs=bev_query.size(1),  device=bev_query.device, dtype=bev_query.dtype) #(bs, num_points_in_pillar, H * W, 3) H*W表示每个bev位置，3表示xyz坐标
         ref_2d = self.get_reference_points(
-            bev_h, bev_w, dim='2d', bs=bev_query.size(1), device=bev_query.device, dtype=bev_query.dtype)
+            bev_h, bev_w, dim='2d', bs=bev_query.size(1), device=bev_query.device, dtype=bev_query.dtype) # (bs, H * W, 1, 2)
 
         reference_points_cam, bev_mask = self.point_sampling(
             ref_3d, self.pc_range, kwargs['img_metas'])
 
         # bug: this code should be 'shift_ref_2d = ref_2d.clone()', we keep this bug for reproducing our results in paper.
         shift_ref_2d = ref_2d.clone()
-        shift_ref_2d += shift[:, None, None, :]
+        shift_ref_2d += shift[:, None, None, :] # (bs, 1, 1, 2) 加上偏移量 广播 (bs, H * W, 1, 2)
 
         # (num_query, bs, embed_dims) -> (bs, num_query, embed_dims)
         bev_query = bev_query.permute(1, 0, 2)
-        bev_pos = bev_pos.permute(1, 0, 2)
-        bs, len_bev, num_bev_level, _ = ref_2d.shape
-        if prev_bev is not None:
+        bev_pos = bev_pos.permute(1, 0, 2) # [1, 50 * 50, 256]
+        bs, len_bev, num_bev_level, _ = ref_2d.shape# (bs, H * W, 1, 2)
+        if prev_bev is not None: # 有prev_bev 
             prev_bev = prev_bev.permute(1, 0, 2)
-            prev_bev = torch.stack(
+            prev_bev = torch.stack( # prev_bev 由prev_bev 和 bev_query 堆叠
                 [prev_bev, bev_query], 1).reshape(bs*2, len_bev, -1)
             hybird_ref_2d = torch.stack([shift_ref_2d, ref_2d], 1).reshape(
-                bs*2, len_bev, num_bev_level, 2)
-        else:
-            hybird_ref_2d = torch.stack([ref_2d, ref_2d], 1).reshape(
+                bs*2, len_bev, num_bev_level, 2)# 将 shift_ref_2d 和 ref_2d 堆叠
+        else:                   # 无 prev_bev 直接通过 ref_2d 堆叠
+            hybird_ref_2d = torch.stack([ref_2d, ref_2d], 1).reshape( # (bs, 2, H * W, 1, 2) -> (bs * 2, H * W, 1, 2)
                 bs*2, len_bev, num_bev_level, 2)
 
-        for lid, layer in enumerate(self.layers):
+        for lid, layer in enumerate(self.layers): # TSA -> SCA -> FFN
             output = layer(
                 bev_query,
                 key,
@@ -229,7 +235,7 @@ class BEVFormerEncoder(TransformerLayerSequence):
                 prev_bev=prev_bev,
                 **kwargs)
 
-            bev_query = output
+            bev_query = output # output 更新 bev_query
             if self.return_intermediate:
                 intermediate.append(output)
 

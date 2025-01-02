@@ -1,0 +1,27 @@
+{
+    // 设置 Python 解释器路径（根据实际环境调整）
+    "python.defaultInterpreterPath": "/home/zxp/anaconda3/envs/bevformer/bin/python",
+  
+    // 指定需要分析的目录，减少 Pylance 的分析范围
+    "python.analysis.extraPaths": [
+      "./mmdetection3d",
+      "./projects",
+      "./tools"
+    ],
+  
+    // 排除不需要分析的目录，提升性能
+    "python.analysis.exclude": [
+      "**/__pycache__",
+      "**/ckpts",         // 检查点文件夹，通常包含模型权重文件
+      "**/data",          // 数据文件夹
+      "**/docs",          // 文档文件夹
+      "**/figs",          // 图片或可视化文件夹
+      "**/result_visual", // 结果可视化文件夹
+      "**/test",          // 测试目录
+      "**/val",           // 验证目录
+      "**/work_dirs",     // 工作输出文件夹
+      "**/node_modules"   // 如果存在前端相关的文件夹
+    ],
+
+}
+  

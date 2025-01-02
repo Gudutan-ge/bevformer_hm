@@ -14,7 +14,7 @@ from mmcv.runner import force_fp32, auto_fp16
 
 
 @HEADS.register_module()
-class BEVFormerHead(DETRHead):
+class BEVFormerHead(DETRHead):#继承自DETRHead
     """Head of Detr3D.
     Args:
         with_box_refine (bool): Whether to refine the reference points
@@ -55,9 +55,9 @@ class BEVFormerHead(DETRHead):
         else:
             self.code_weights = [1.0, 1.0, 1.0,
                                  1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
-
-        self.bbox_coder = build_bbox_coder(bbox_coder)
-        self.pc_range = self.bbox_coder.pc_range
+        
+        self.bbox_coder = build_bbox_coder(bbox_coder) #定义了bev_query所表征的空间范围
+        self.pc_range = self.bbox_coder.pc_range #pc_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]（单位:m）
         self.real_w = self.pc_range[3] - self.pc_range[0]
         self.real_h = self.pc_range[4] - self.pc_range[1]
         self.num_cls_fcs = num_cls_fcs - 1
@@ -102,7 +102,7 @@ class BEVFormerHead(DETRHead):
 
         if not self.as_two_stage:
             self.bev_embedding = nn.Embedding(
-                self.bev_h * self.bev_w, self.embed_dims)
+                self.bev_h * self.bev_w, self.embed_dims) # (bev_h * bev_w, embed_dims)
             self.query_embedding = nn.Embedding(self.num_query,
                                                 self.embed_dims * 2)
 
@@ -118,10 +118,10 @@ class BEVFormerHead(DETRHead):
     def forward(self, mlvl_feats, img_metas, prev_bev=None,  only_bev=False):
         """Forward function.
         Args:
-            mlvl_feats (tuple[Tensor]): Features from the upstream
+            mlvl_feats 每一帧图像的多尺度特征(tuple[Tensor]): Features from the upstream
                 network, each is a 5D-tensor with shape
-                (B, N, C, H, W).
-            prev_bev: previous bev featues
+                (B, N, C, H, W). B-BatchSize N-Num_cam chw-img
+            prev_bev历史bev: previous bev featues
             only_bev: only compute BEV features with encoder. 
         Returns:
             all_cls_scores (Tensor): Outputs from the classification head, \
@@ -131,28 +131,27 @@ class BEVFormerHead(DETRHead):
                 head with normalized coordinate format (cx, cy, w, l, cz, h, theta, vx, vy). \
                 Shape [nb_dec, bs, num_query, 9].
         """
-        bs, num_cam, _, _, _ = mlvl_feats[0].shape
-        dtype = mlvl_feats[0].dtype
-        object_query_embeds = self.query_embedding.weight.to(dtype)
-        bev_queries = self.bev_embedding.weight.to(dtype)
-
+        bs, num_cam, _, _, _ = mlvl_feats[0].shape # 通过第0个尺度图像特征获取bs
+        dtype = mlvl_feats[0].dtype # 数据格式 torch.float32
+        object_query_embeds = self.query_embedding.weight.to(dtype) # 物体query:torch.Size([900,256])
+        bev_queries = self.bev_embedding.weight.to(dtype) # bev_queries:torch.Size([50*50, 256])每个位置（50*50），每个通道 256
         bev_mask = torch.zeros((bs, self.bev_h, self.bev_w),
-                               device=bev_queries.device).to(dtype)
-        bev_pos = self.positional_encoding(bev_mask).to(dtype)
-
-        if only_bev:  # only use encoder to obtain BEV features, TODO: refine the workaround
+                               device=bev_queries.device).to(dtype)# 零值矩阵，维度与bev空间一致 torch.Size([bs = 1,50,50])
+        bev_pos = self.positional_encoding(bev_mask).to(dtype)# 利用bev_mask生成bev_pos作为bev_queries的位置编码，有多少bev_query就有多少位置编码torch.Size([1, 256, 50, 50])
+        if only_bev:  # only use encoder to obtain BEV features, TODO: refine the workaround # 只获取bev
+            # obtain_history_bev: only_bev = true
             return self.transformer.get_bev_features(
-                mlvl_feats,
-                bev_queries,
+                mlvl_feats, # 每一帧图像的多尺度特征
+                bev_queries, # Q
                 self.bev_h,
-                self.bev_w,
+                self.bev_w, # bev尺寸
                 grid_length=(self.real_h / self.bev_h,
-                             self.real_w / self.bev_w),
-                bev_pos=bev_pos,
-                img_metas=img_metas,
-                prev_bev=prev_bev,
+                             self.real_w / self.bev_w), # 真实场景 / bev数量 = 每个bev网格真实大小 （m）
+                bev_pos=bev_pos, # bev位置编码
+                img_metas=img_metas, # 图片信息
+                prev_bev=prev_bev, # 历史bev
             )
-        else:
+        else: # only_bev 默认 false
             outputs = self.transformer(
                 mlvl_feats,
                 bev_queries,
@@ -166,7 +165,7 @@ class BEVFormerHead(DETRHead):
                 cls_branches=self.cls_branches if self.as_two_stage else None,
                 img_metas=img_metas,
                 prev_bev=prev_bev
-        )
+            )
 
         bev_embed, hs, init_reference, inter_references = outputs
         hs = hs.permute(0, 2, 1, 3)

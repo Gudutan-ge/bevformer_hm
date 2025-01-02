@@ -100,9 +100,9 @@ def parse_args():
 
 
 def main():
-    args = parse_args()
+    args = parse_args() #传命令行参数
 
-    cfg = Config.fromfile(args.config)
+    cfg = Config.fromfile(args.config) # 通过文件路径导入配置文件
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
     # import modules from string list.
@@ -216,14 +216,14 @@ def main():
     meta['seed'] = args.seed
     meta['exp_name'] = osp.basename(args.config)
 
-    model = build_model(
+    model = build_model( # 模型搭建
         cfg.model,
         train_cfg=cfg.get('train_cfg'),
         test_cfg=cfg.get('test_cfg'))
     model.init_weights()
 
     logger.info(f'Model:\n{model}')
-    datasets = [build_dataset(cfg.data.train)]
+    datasets = [build_dataset(cfg.data.train)] #数据集
     if len(cfg.workflow) == 2:
         val_dataset = copy.deepcopy(cfg.data.val)
         # in case we use a dataset wrapper
@@ -249,7 +249,7 @@ def main():
             if hasattr(datasets[0], 'PALETTE') else None)
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
-    custom_train_model(
+    custom_train_model( # 模型训练
         model,
         datasets,
         cfg,

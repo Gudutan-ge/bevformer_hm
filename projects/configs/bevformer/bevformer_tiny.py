@@ -6,7 +6,7 @@
 # smaller input size: 1600*900 -> 800*450
 # multi-scale feautres -> single scale features (C5)
 
-
+# 基础设置
 _base_ = [
     '../datasets/custom_nus-3d.py',
     '../_base_/default_runtime.py'
@@ -18,10 +18,7 @@ plugin_dir = 'projects/mmdet3d_plugin/'
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
 point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
-voxel_size = [0.2, 0.2, 8]
-
-
-
+voxel_size = [0.2, 0.2, 8] # 体素尺寸
 
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
@@ -43,13 +40,13 @@ _dim_ = 256
 _pos_dim_ = _dim_//2
 _ffn_dim_ = _dim_*2
 _num_levels_ = 1
-bev_h_ = 50
+bev_h_ = 50 #bev空间大小
 bev_w_ = 50
 queue_length = 3 # each sequence contains `queue_length` frames.
 
 model = dict(
     type='BEVFormer',
-    use_grid_mask=True,
+    use_grid_mask=True, # 使用mask
     video_test_mode=True,
     pretrained=dict(img='torchvision://resnet50'),
     img_backbone=dict(
@@ -61,10 +58,10 @@ model = dict(
         norm_cfg=dict(type='BN', requires_grad=False),
         norm_eval=True,
         style='pytorch'),
-    img_neck=dict(
-        type='FPN',
-        in_channels=[2048],
-        out_channels=_dim_,
+    img_neck=dict(  #脖子 —— 连接head和backbone
+        type='FPN', #特征金字塔——多尺度特征融合
+        in_channels=[2048], #输入通道2048 = backbone输出通道
+        out_channels=_dim_, #输出通道256
         start_level=0,
         add_extra_convs='on_output',
         num_outs=_num_levels_,
@@ -73,21 +70,21 @@ model = dict(
         type='BEVFormerHead',
         bev_h=bev_h_,
         bev_w=bev_w_,
-        num_query=900,
-        num_classes=10,
+        num_query=900,  # 用于查询的数目
+        num_classes=10, # 类别数目
         in_channels=_dim_,
         sync_cls_avg_factor=True,
         with_box_refine=True,
         as_two_stage=False,
         transformer=dict(
             type='PerceptionTransformer',
-            rotate_prev_bev=True,
-            use_shift=True,
-            use_can_bus=True,
+            rotate_prev_bev=True, #旋转历史bev
+            use_shift=True, # 平移
+            use_can_bus=True, # 使用can_bus
             embed_dims=_dim_,
             encoder=dict(
                 type='BEVFormerEncoder',
-                num_layers=3,
+                num_layers=3, # 3层layer
                 pc_range=point_cloud_range,
                 num_points_in_pillar=4,
                 return_intermediate=False,
@@ -157,7 +154,7 @@ model = dict(
         loss_bbox=dict(type='L1Loss', loss_weight=0.25),
         loss_iou=dict(type='GIoULoss', loss_weight=0.0)),
     # model training and testing settings
-    train_cfg=dict(pts=dict(
+    train_cfg=dict(pts=dict( # 训练设置
         grid_size=[512, 512, 1],
         voxel_size=voxel_size,
         point_cloud_range=point_cloud_range,
@@ -208,22 +205,22 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=1,
-    workers_per_gpu=4,
+    samples_per_gpu=1, # batch
+    workers_per_gpu=0,
     train=dict(
-        type=dataset_type,
-        data_root=data_root,
-        ann_file=data_root + 'nuscenes_infos_temporal_train.pkl',
-        pipeline=train_pipeline,
-        classes=class_names,
-        modality=input_modality,
-        test_mode=False,
+        type=dataset_type, # 数据集类型CustomNuScenesDataset
+        data_root=data_root, # 数据根目录 data/nuscenes/
+        ann_file=data_root + 'nuscenes_infos_temporal_train.pkl', #标注文件
+        pipeline=train_pipeline, # 数据预处理管道，定义数据的处理流程
+        classes=class_names, # 类别列表
+        modality=input_modality, # 输入模态（如图像、LiDAR 数据） # use_camera = True  use_external=True
+        test_mode=False, # 是否处于测试模式
         use_valid_flag=True,
-        bev_size=(bev_h_, bev_w_),
-        queue_length=queue_length,
+        bev_size=(bev_h_, bev_w_), # 50 50
+        queue_length=queue_length, # 队列长度 queue_length = 3 3 帧
         # we use box_type_3d='LiDAR' in kitti and nuscenes dataset
         # and box_type_3d='Depth' in sunrgbd and scannet dataset.
-        box_type_3d='LiDAR'),
+        box_type_3d='LiDAR'), # 三维框的类型
     val=dict(type=dataset_type,
              data_root=data_root,
              ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
@@ -234,8 +231,8 @@ data = dict(
               ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
               pipeline=test_pipeline, bev_size=(bev_h_, bev_w_),
               classes=class_names, modality=input_modality),
-    shuffler_sampler=dict(type='DistributedGroupSampler'),
-    nonshuffler_sampler=dict(type='DistributedSampler')
+    shuffler_sampler=dict(type='DistributedGroupSampler'), # 分布式分组采样器，通常用于训练集
+    nonshuffler_sampler=dict(type='DistributedSampler') # 分布式采样器，不打乱数据顺序，通常用于验证和测试。
 )
 
 optimizer = dict(
@@ -255,7 +252,7 @@ lr_config = dict(
     warmup_iters=500,
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3)
-total_epochs = 24
+total_epochs = 2
 evaluation = dict(interval=1, pipeline=test_pipeline)
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)

@@ -25,7 +25,7 @@ from nuscenes.eval.common.data_classes import EvalBoxes, EvalBox
 from nuscenes.eval.detection.data_classes import DetectionBox
 from nuscenes.eval.detection.utils import category_to_detection_name
 from nuscenes.eval.detection.render import visualize_sample
-
+import os
 
 
 
@@ -464,14 +464,17 @@ def render_sample_data(
 
     if out_path is not None:
         plt.savefig(out_path+'_camera', bbox_inches='tight', pad_inches=0, dpi=200)
-    if verbose:
-        plt.show()
+    # if verbose:
+    #     plt.show()
     plt.close()
 
 if __name__ == '__main__':
-    nusc = NuScenes(version='v1.0-trainval', dataroot='./data/nuscenes', verbose=True)
+    nusc = NuScenes(version='v1.0-mini', dataroot='./data/nuscenes', verbose=False)
     # render_annotation('7603b030b42a4b1caa8c443ccc1a7d52')
-    bevformer_results = mmcv.load('test/bevformer_base/Thu_Jun__9_16_22_37_2022/pts_bbox/results_nusc.json')
+    bevformer_results = mmcv.load('test/bevformer_tiny/Sat_Dec_14_11_39_15_2024/pts_bbox/results_nusc.json')
+    save_dir = "result"
+    if not os.path.exists(save_dir):
+        os.mkdir(save_dir)
     sample_token_list = list(bevformer_results['results'].keys())
     for id in range(0, 10):
         render_sample_data(sample_token_list[id], pred_data=bevformer_results, out_path=sample_token_list[id])

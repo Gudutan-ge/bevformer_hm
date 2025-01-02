@@ -9,7 +9,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
-ckpts/
+mmdetection3d/
 data/
 ckpts
 data
